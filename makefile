@@ -11,10 +11,10 @@ show_env: .env
 	@cat .env
 
 crawler/target/release/crawler: crawler/src/* crawler/Cargo.toml
-	cd crawler && cargo build --release
+	cd crawler && docker run --rm --user "$$(id -u)":"$$(id -g)" -v "$$PWD":/usr/src/myapp -w /usr/src/myapp rust cargo build --release
 
 splitter/target/release/splitter: splitter/src/* splitter/Cargo.toml
-	cd splitter && cargo build --release
+	cd splitter && docker run --rm --user "$$(id -u)":"$$(id -g)" -v "$$PWD":/usr/src/myapp -w /usr/src/myapp rust cargo build --release
 
 movie_ids:
 	-wget -nc http://files.tmdb.org/p/exports/movie_ids_$(YESTERDAY).json.gz -O movie_ids.json.gz
@@ -37,6 +37,6 @@ map_reduce_remote:
 	pssh -t 0 --user $(REMOTE_USER) --hosts $(IPS) -i "cd $(REMOTE_WORKING_DIR); ./map_reduce.sh"
 
 clean:
-	cd crawler && cargo clean
-	cd splitter && cargo clean
+	cd crawler && cargo clean && rm -rf target
+	cd splitter && cargo clean && rm -rf target
 	rm -f movie_ids.json movie_ids.json.gz
