@@ -25,10 +25,16 @@ init_remote: crawler/target/release/crawler splitter/target/release/splitter
 	ssh $(REMOTE_USER)@$(REMOTE_HOST) mkdir -p $(REMOTE_WORKING_DIR)
 	scp -r .env makefile $(IPS) map_reduce.sh crawler/target/release/crawler splitter/target/release/splitter $(REMOTE_USER)@$(REMOTE_HOST):$(REMOTE_WORKING_DIR)
 	ssh $(REMOTE_USER)@$(REMOTE_HOST) "cd $(REMOTE_WORKING_DIR); make movie_ids"
-	ssh $(REMOTE_USER)@$(REMOTE_HOST) "cd $(REMOTE_WORKING_DIR); curl -O 'https://gist.githubusercontent.com/tavinus/93bdbc051728748787dc22a58dfe58d8/raw/cloudsend.sh' && chmod +x cloudsend.sh"
+	ssh $(REMOTE_USER)@$(REMOTE_HOST) "cd $(REMOTE_WORKING_DIR); curl -O 'https://raw.githubusercontent.com/tavinus/cloudsend.sh/master/cloudsend.sh' && chmod +x cloudsend.sh"
+
+ping_remote:
+	pssh -t 0 --user $(REMOTE_USER) --hosts $(IPS) --inline-stdout "echo pong"
+
+load_remote:
+	pssh -t 0 --user $(REMOTE_USER) --hosts $(IPS) -i "cat /proc/loadavg"
 
 map_reduce_remote:
-	parallel-ssh -t 0 --user $(REMOTE_USER) --hosts $(IPS) -i "cd $(REMOTE_WORKING_DIR); ./map_reduce.sh"
+	pssh -t 0 --user $(REMOTE_USER) --hosts $(IPS) -i "cd $(REMOTE_WORKING_DIR); ./map_reduce.sh"
 
 clean:
 	cd crawler && cargo clean
