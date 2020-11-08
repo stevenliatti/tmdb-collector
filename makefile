@@ -16,15 +16,20 @@ crawler/target/release/crawler: crawler/src/* crawler/Cargo.toml
 splitter/target/release/splitter: splitter/src/* splitter/Cargo.toml
 	cd splitter && docker run --rm --user "$$(id -u)":"$$(id -g)" -v "$$PWD":/usr/src/myapp -w /usr/src/myapp rust cargo build --release
 
-movie_ids:
-	-wget -nc http://files.tmdb.org/p/exports/movie_ids_$(YESTERDAY).json.gz -O movie_ids.json.gz
-	-gunzip -k movie_ids.json.gz
+%_ids.json.gz:
+	wget http://files.tmdb.org/p/exports/$$(basename $@ .json.gz)_$(YESTERDAY).json.gz -O $@
+
+%_ids.json: %_ids.json.gz
+	gunzip -k $^
+
+popular_person.json: person_ids.json
+	cat $^ | jq -s 'sort_by(.popularity) | reverse | .[0:10000] | .[]' | jq -c > $@
 
 # In our case, init on only one host, because all hosts homes are synchronized via NFS
 init_remote: crawler/target/release/crawler splitter/target/release/splitter
 	ssh $(REMOTE_USER)@$(REMOTE_HOST) mkdir -p $(REMOTE_WORKING_DIR)
 	scp -r .env makefile $(IPS) map_reduce.sh crawler/target/release/crawler splitter/target/release/splitter $(REMOTE_USER)@$(REMOTE_HOST):$(REMOTE_WORKING_DIR)
-	ssh $(REMOTE_USER)@$(REMOTE_HOST) "cd $(REMOTE_WORKING_DIR); make movie_ids"
+	ssh $(REMOTE_USER)@$(REMOTE_HOST) "cd $(REMOTE_WORKING_DIR); make movie_ids.json popular_person.json"
 	ssh $(REMOTE_USER)@$(REMOTE_HOST) "cd $(REMOTE_WORKING_DIR); curl -O 'https://raw.githubusercontent.com/tavinus/cloudsend.sh/master/cloudsend.sh' && chmod +x cloudsend.sh"
 
 ping_remote:
@@ -39,4 +44,4 @@ map_reduce_remote:
 clean:
 	cd crawler && cargo clean && rm -rf target
 	cd splitter && cargo clean && rm -rf target
-	rm -f movie_ids.json movie_ids.json.gz
+	rm -f *.json*

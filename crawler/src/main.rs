@@ -7,6 +7,7 @@ use std::env;
 use std::fs::File;
 use std::io::{BufRead, BufReader, Write};
 use std::sync::mpsc::channel;
+use std::sync::mpsc::Sender;
 use std::thread;
 use std::time::Instant;
 
@@ -34,6 +35,11 @@ struct Movie {
     credits: Credits,
     similar: ConnectedMovies,
     recommendations: ConnectedMovies,
+}
+
+enum DataResponse {
+    Movie,
+    Actor,
 }
 
 fn filter_movie(movie: &Movie) -> bool {
@@ -74,15 +80,15 @@ fn make_ids(input_file: &String) -> Vec<usize> {
     let reader = BufReader::new(file);
     let mut all_ids = vec![];
     for line in reader.lines() {
-        let movie: IdObject = serde_json::from_str(&line.unwrap()).unwrap();
-        all_ids.push(movie.id);
+        let id_object: IdObject = serde_json::from_str(&line.unwrap()).unwrap();
+        all_ids.push(id_object.id);
     }
     return all_ids;
 }
 
 // Divide ids vector in multiple sub vectors, one for each thread
 // Jump from multiple of threads to another to take current id
-fn make_thread_ids(machines: usize, machine_id: usize, all_ids: &Vec<usize>) -> Vec<usize> {
+fn make_ids_for_thread(machines: usize, machine_id: usize, all_ids: &Vec<usize>) -> Vec<usize> {
     let mut thread_ids = vec![];
     let mut count: usize = machine_id;
     for (i, id) in all_ids.iter().enumerate() {
@@ -94,23 +100,96 @@ fn make_thread_ids(machines: usize, machine_id: usize, all_ids: &Vec<usize>) -> 
     return thread_ids;
 }
 
+fn parse_movie_string(crawler: &Sender<String>, movie_string: String) {
+    let movie: Result<Movie, serde_json::error::Error> = serde_json::from_str(&movie_string);
+    match movie {
+        Ok(movie) => {
+            if filter_movie(&movie) {
+                crawler
+                    .send(movie_string)
+                    .expect("fail to send movie_string");
+                movie
+                    .credits
+                    .cast
+                    .iter()
+                    .map(|a_id| a_id.id.to_string())
+                    .for_each(|a| {
+                        crawler
+                            .send(String::from("actor_id:") + &a)
+                            .expect("fail to send actor_id")
+                    });
+            }
+        }
+        _ => (),
+    }
+}
+
+fn parse_actor_string(crawler: &Sender<String>, actor_string: String) {
+    crawler
+        .send(actor_string)
+        .expect("fail to send actor_string");
+}
+
+fn get_tmdb_data(
+    threads_nb: usize,
+    thread_id: usize,
+    ids: &Vec<usize>,
+    api_key: String,
+    crawler: Sender<String>,
+    done: String,
+    data_response: &'static DataResponse,
+) -> thread::JoinHandle<()> {
+    // In each thread, make requests from own ids
+    let ids_for_thread = make_ids_for_thread(threads_nb, thread_id, ids);
+    let handle = thread::spawn(move || {
+        for id in ids_for_thread {
+            let request_url = match data_response {
+                DataResponse::Movie => make_movie_url(&api_key, id),
+                DataResponse::Actor => make_actor_url(&api_key, id),
+            };
+            let response = reqwest::blocking::get(&request_url);
+            match response {
+                Ok(data) => {
+                    if data.status().is_success() {
+                        let data_string = data.text().expect("fail to data_string");
+                        match data_response {
+                            DataResponse::Movie => parse_movie_string(&crawler, data_string),
+                            DataResponse::Actor => parse_actor_string(&crawler, data_string),
+                        }
+                    }
+                }
+                _ => (),
+            }
+        }
+        // When done, send "done" message
+        crawler.send(done).unwrap();
+        println!("Thread {} done", thread_id);
+    });
+    handle
+}
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Start timer
     let now = Instant::now();
 
     // Args management
     let args: Vec<String> = env::args().collect();
-    if args.len() < 6 {
+    if args.len() < 5 {
         println!("Wrong args");
         std::process::exit(42)
     }
     let api_key = &args[1];
-    let input_file = &args[2];
-    let movies_output_file = &args[3];
-    let actor_ids_output_file = &args[4];
-    let threads = &args[5].parse().unwrap();
+    let threads = &args[2].parse().unwrap();
+    let input_file = &args[3];
+    let data_output_file = &args[4];
 
-    // Extract all ids from TMDb daily export file
+    let data_response = if args.len() > 5 {
+        &DataResponse::Movie
+    } else {
+        &DataResponse::Actor
+    };
+
+    // Extract all ids from TMDb daily export file or actor ids generated
     let ids = make_ids(input_file);
 
     // Threads and channel management
@@ -123,48 +202,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let api_key_clone = api_key.clone();
             let done_clone = done.clone();
             let crawler = crawlers.clone();
-            // In each thread, make requests from own thread_ids
-            let thread_ids = make_thread_ids(*threads, i, &ids);
-            let handle = thread::spawn(move || {
-                for id in thread_ids {
-                    let response = reqwest::blocking::get(&make_movie_url(&api_key_clone, id));
-                    match response {
-                        Ok(data) => {
-                            // If request succeed, check if movie's revenue and budget
-                            // are greater than zero. In this case, send movie to writer.
-                            if data.status().is_success() {
-                                let movie_string = data.text().expect("fail to movie_string");
-                                let movie: Result<Movie, serde_json::error::Error> =
-                                    serde_json::from_str(&movie_string);
-                                match movie {
-                                    Ok(movie) => {
-                                        if filter_movie(&movie) {
-                                            crawler
-                                                .send(movie_string)
-                                                .expect("fail to send movie_string");
-                                            movie
-                                                .credits
-                                                .cast
-                                                .iter()
-                                                .map(|a_id| a_id.id.to_string())
-                                                .for_each(|a| {
-                                                    crawler
-                                                        .send(String::from("actor_id:") + &a)
-                                                        .expect("fail to send a")
-                                                });
-                                        }
-                                    }
-                                    _ => (),
-                                }
-                            }
-                        }
-                        _ => (),
-                    }
-                }
-                // When done, send "done" message
-                crawler.send(done_clone).unwrap();
-            });
-            handle
+            println!("Start thread {}", i);
+            return get_tmdb_data(
+                *threads,
+                i,
+                &ids,
+                api_key_clone,
+                crawler,
+                done_clone,
+                data_response,
+            );
         })
         .collect::<Vec<thread::JoinHandle<_>>>();
 
@@ -173,28 +220,44 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         handle.join().unwrap()
     }
 
-    // Write all movies responses in a file until all threads crawler finish
-    let mut movies_output_file = File::create(movies_output_file).unwrap();
-    let mut actor_ids_set = HashSet::new();
+    let mut data_output_file = File::create(data_output_file).unwrap();
     let mut counter = 0;
-    for message in writer {
-        if message == done {
-            counter = counter + 1;
-        } else if message.starts_with("actor_id") {
-            let id: String = message.split(":").collect::<Vec<_>>()[1].to_string();
-            actor_ids_set.insert(id);
-        } else {
-            write!(movies_output_file, "{}\n", message).unwrap();
-        }
-        if &counter == threads {
-            break;
-        }
-    }
+    match data_response {
+        DataResponse::Movie => {
+            // Write all movies responses in a file until all threads crawler finish
+            let mut actor_ids_set = HashSet::new();
+            for message in writer {
+                if message == done {
+                    counter = counter + 1;
+                } else if message.starts_with("actor_id") {
+                    let id: String = message.split(":").collect::<Vec<_>>()[1].to_string();
+                    actor_ids_set.insert(id);
+                } else {
+                    write!(data_output_file, "{}\n", message).unwrap();
+                }
+                if &counter == threads {
+                    break;
+                }
+            }
 
-    // Write all actor_ids retrieved
-    let mut actor_ids_output_file = File::create(actor_ids_output_file).unwrap();
-    for id in actor_ids_set {
-        write!(actor_ids_output_file, "{}\n", id).unwrap();
+            // Write all actor_ids retrieved
+            let mut actor_ids_output_file = File::create(&args[5]).unwrap();
+            for id in actor_ids_set {
+                write!(actor_ids_output_file, "{{\"id\":{}}}\n", id).unwrap();
+            }
+        }
+        DataResponse::Actor => {
+            for message in writer {
+                if message == done {
+                    counter = counter + 1;
+                } else {
+                    write!(data_output_file, "{}\n", message).unwrap();
+                }
+                if &counter == threads {
+                    break;
+                }
+            }
+        }
     }
 
     println!("Done in {} seconds", now.elapsed().as_secs());
