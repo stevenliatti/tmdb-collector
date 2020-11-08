@@ -26,10 +26,10 @@ popular_person.json: person_ids.json
 	cat $^ | jq -s 'sort_by(.popularity) | reverse | .[0:10000] | .[]' | jq -c > $@
 
 # In our case, init on only one host, because all hosts homes are synchronized via NFS
-init_remote: crawler/target/release/crawler splitter/target/release/splitter
+init_remote: crawler/target/release/crawler splitter/target/release/splitter popular_person.json
 	ssh $(REMOTE_USER)@$(REMOTE_HOST) mkdir -p $(REMOTE_WORKING_DIR)
-	scp -r .env makefile $(IPS) map_reduce.sh crawler/target/release/crawler splitter/target/release/splitter $(REMOTE_USER)@$(REMOTE_HOST):$(REMOTE_WORKING_DIR)
-	ssh $(REMOTE_USER)@$(REMOTE_HOST) "cd $(REMOTE_WORKING_DIR); make movie_ids.json popular_person.json"
+	scp -r .env makefile $(IPS) map_reduce.sh $^ $(REMOTE_USER)@$(REMOTE_HOST):$(REMOTE_WORKING_DIR)
+	ssh $(REMOTE_USER)@$(REMOTE_HOST) "cd $(REMOTE_WORKING_DIR); make movie_ids.json"
 	ssh $(REMOTE_USER)@$(REMOTE_HOST) "cd $(REMOTE_WORKING_DIR); curl -O 'https://raw.githubusercontent.com/tavinus/cloudsend.sh/master/cloudsend.sh' && chmod +x cloudsend.sh"
 
 ping_remote:
@@ -39,9 +39,15 @@ load_remote:
 	pssh -t 0 --user $(REMOTE_USER) --hosts $(IPS) -i "cat /proc/loadavg"
 
 map_reduce_remote:
-	pssh -t 0 --user $(REMOTE_USER) --hosts $(IPS) -i "cd $(REMOTE_WORKING_DIR); ./map_reduce.sh"
+	./$@.sh
 
 clean:
 	cd crawler && cargo clean && rm -rf target
 	cd splitter && cargo clean && rm -rf target
 	rm -f *.json*
+
+kill_remote:
+	pssh -t 0 --user $(REMOTE_USER) --hosts $(IPS) --inline-stdout "killall crawler"
+
+clean_remote:
+	ssh $(REMOTE_USER)@$(REMOTE_HOST) rm -rf $(REMOTE_WORKING_DIR)

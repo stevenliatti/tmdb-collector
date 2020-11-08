@@ -2,7 +2,6 @@
 // Steven Liatti & Jeremy Favre
 
 use serde::{Deserialize, Serialize};
-use std::collections::HashSet;
 use std::env;
 use std::fs::File;
 use std::io::{BufRead, BufReader, Write};
@@ -108,16 +107,6 @@ fn parse_movie_string(crawler: &Sender<String>, movie_string: String) {
                 crawler
                     .send(movie_string)
                     .expect("fail to send movie_string");
-                movie
-                    .credits
-                    .cast
-                    .iter()
-                    .map(|a_id| a_id.id.to_string())
-                    .for_each(|a| {
-                        crawler
-                            .send(String::from("actor_id:") + &a)
-                            .expect("fail to send actor_id")
-                    });
             }
         }
         _ => (),
@@ -151,10 +140,15 @@ fn get_tmdb_data(
             match response {
                 Ok(data) => {
                     if data.status().is_success() {
-                        let data_string = data.text().expect("fail to data_string");
-                        match data_response {
-                            DataResponse::Movie => parse_movie_string(&crawler, data_string),
-                            DataResponse::Actor => parse_actor_string(&crawler, data_string),
+                        let data_string = data.text();
+                        match data_string {
+                            Ok(data_string) => {
+                                match data_response {
+                                    DataResponse::Movie => parse_movie_string(&crawler, data_string),
+                                    DataResponse::Actor => parse_actor_string(&crawler, data_string),
+                                }
+                            }
+                            _ => ()
                         }
                     }
                 }
@@ -174,7 +168,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Args management
     let args: Vec<String> = env::args().collect();
-    if args.len() < 5 {
+    if args.len() < 6 {
         println!("Wrong args");
         std::process::exit(42)
     }
@@ -183,11 +177,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let input_file = &args[3];
     let data_output_file = &args[4];
 
-    let data_response = if args.len() > 5 {
+    let data_response = if &args[5] == "movie" {
         &DataResponse::Movie
     } else {
         &DataResponse::Actor
     };
+
+    println!("Start crawler on {}", input_file);
 
     // Extract all ids from TMDb daily export file or actor ids generated
     let ids = make_ids(input_file);
@@ -222,41 +218,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let mut data_output_file = File::create(data_output_file).unwrap();
     let mut counter = 0;
-    match data_response {
-        DataResponse::Movie => {
-            // Write all movies responses in a file until all threads crawler finish
-            let mut actor_ids_set = HashSet::new();
-            for message in writer {
-                if message == done {
-                    counter = counter + 1;
-                } else if message.starts_with("actor_id") {
-                    let id: String = message.split(":").collect::<Vec<_>>()[1].to_string();
-                    actor_ids_set.insert(id);
-                } else {
-                    write!(data_output_file, "{}\n", message).unwrap();
-                }
-                if &counter == threads {
-                    break;
-                }
-            }
 
-            // Write all actor_ids retrieved
-            let mut actor_ids_output_file = File::create(&args[5]).unwrap();
-            for id in actor_ids_set {
-                write!(actor_ids_output_file, "{{\"id\":{}}}\n", id).unwrap();
-            }
+    // Write all movies responses in a file until all threads crawler finish
+    for message in writer {
+        if message == done {
+            counter = counter + 1;
+        } else {
+            write!(data_output_file, "{}\n", message).unwrap();
         }
-        DataResponse::Actor => {
-            for message in writer {
-                if message == done {
-                    counter = counter + 1;
-                } else {
-                    write!(data_output_file, "{}\n", message).unwrap();
-                }
-                if &counter == threads {
-                    break;
-                }
-            }
+        if &counter == threads {
+            break;
         }
     }
 
