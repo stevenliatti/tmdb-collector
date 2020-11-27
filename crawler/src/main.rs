@@ -22,18 +22,11 @@ struct Credits {
 }
 
 #[derive(Serialize, Deserialize, Debug)]
-struct ConnectedMovies {
-    total_results: usize,
-}
-
-#[derive(Serialize, Deserialize, Debug)]
 struct Movie {
     budget: usize,
     revenue: usize,
     genres: Vec<IdObject>,
     credits: Credits,
-    similar: ConnectedMovies,
-    recommendations: ConnectedMovies,
 }
 
 enum DataResponse {
@@ -43,14 +36,12 @@ enum DataResponse {
 
 fn filter_movie(movie: &Movie) -> bool {
     const MIN_BUDGET: usize = 1000;
-    const MIN_REVENUE: usize = 100000000;
+    const MIN_REVENUE: usize = 10000000;
     return movie.budget > MIN_BUDGET
         && movie.revenue >= MIN_REVENUE
         && !movie.genres.is_empty()
         && !movie.credits.cast.is_empty()
-        && !movie.credits.crew.is_empty()
-        && movie.similar.total_results > 0
-        && movie.recommendations.total_results > 0;
+        && !movie.credits.crew.is_empty();
 }
 
 // Construct url for request movie with given id and api key
