@@ -1,5 +1,7 @@
 # TMDb collector
 
+Used in [Hollywood Network Visualizer](https://github.com/stevenliatti/hollywood-network-visualizer).
+
 Distributed and parallel collector from TMDb via its API, written with Rust, makefile and shell scripts. Designed if you have to quickly retrieve the full dataset of movies and actors. This programme is designed to be run on a fleet of machines accessible by SSH. It use the [daily file exports](https://developers.themoviedb.org/3/getting-started/daily-file-exports) of TMDb.
 
 ## Workflow
